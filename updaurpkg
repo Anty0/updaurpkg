@@ -1,0 +1,131 @@
+#!/bin/bash
+
+# Usage: updaurpkg [--apply] PACKAGE_DIRECTORY...
+#   Checks for available upstream updates
+#     --apply - Also apply update to the PKGBUILD, build and install package and commit changes
+
+# PKGBUILD requirements:
+#   variable _source_type - one of values:
+#     github-releases - check for update in github repository releases, requires variable _repo with user/repo as value
+#     github-tags - check for update in github repository tags, requires variable _repo with user/repo as value
+#     custom - use output of function _upstreamver_check as current version
+#   variable _upstreamver - will be modified according to the new version
+#   variable _upstreamver_regex - optional, check new version against regex using grep
+#   function _after_check_hook - optional, will be executed with upstream version as argument once upstream version is validated
+
+####################################
+# Disabled feateures
+#   variable _nextcloud_appname - optional, verify version against nextcloud app repository
+
+set -e
+set -o pipefail
+
+
+# _working_dir="$(pwd)"
+# _nextcloud_app_info=""
+
+
+check_package() {
+	# cd "${_working_dir}"
+
+	if [ ! -d "$1" ] || [ ! -f "$1/PKGBUILD" ]; then
+		printf "%s: Not a valid package directory\n" "$(basename $1)"
+		return
+	fi
+
+	# unset pkgver
+	# unset _source_type
+	# unset _repo
+	# unset _upstreamver_check
+	# unset _upstreamver
+	# unset _upstreamver_regex
+	# unset _nextcloud_appname
+	# unset _after_check_hook
+
+	# cd "${_working_dir}/$1"
+	cd "$1"
+	source ./PKGBUILD
+
+	case "$_source_type" in
+	github-releases)
+		VERSION="$(curl -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${_repo}/releases/latest" 2>/dev/null | jq -r '.tag_name')"
+		;;
+	github-tags)
+		VERSION="$(curl -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${_repo}/tags" 2>/dev/null | jq -r '.[0].name')"
+		;;
+	custom)
+		VERSION="$(_upstreamver_check)"
+		;;
+	*)
+		printf "%s: Skip (unsupported source type)\n" "${pkgname}"
+		return
+		;;
+	esac
+
+	if [ -n "${_upstreamver_regex}" ] && not grep -q -E -- "${_upstreamver_regex}" <<< "${VERSION}"; then
+		printf "%s: Failed validation of upstream version: %s\n" "${pkgname}" "${VERSION}"
+		return
+	fi
+
+	# if [ -n "${_nextcloud_appname}" ]; then
+	# 	if [ -z "${_nextcloud_app_info}" ]; then
+	# 		_nextcloud_server_version="$(pacman -Si nextcloud | grep Version | rev | cut -d' ' -f1 | rev | cut -d- -f1)"
+	# 		_nextcloud_app_info="$(curl "https://apps.nextcloud.com/api/v1/platform/${_nextcloud_server_version}/apps.json" 2>/dev/null)"
+	# 	fi
+
+	# 	NEXTCLOUD_VERSION="$(
+	# 		printf '%s' "${_nextcloud_app_info}" |
+	# 		jq -r '[.[] | select(.id == "'"${_nextcloud_appname}"'") | .releases[] | select(.isNightly == false)] | .[0].version'
+	# 	)"
+	# 	[ "${NEXTCLOUD_VERSION}" == "null" ] && printf '%s: WARNING: Package does not support current nextcloud server version\n' "${pkgname}" >&2
+	# 	[ "${NEXTCLOUD_VERSION}" != "null" ] && [ "${NEXTCLOUD_VERSION}" != "${VERSION}" ] && \
+	# 		printf '%s: WARNING: Upstream and Nextcloud version mismatch: %s vs %s\n' "${pkgname}" "${VERSION}" "${NEXTCLOUD_VERSION}" >&2
+	# fi
+	
+	[ "$(type -t _after_check_hook)" == 'function' ] && _after_check_hook "${VERSION}"
+
+	if [ "${_upstreamver}" = "${VERSION}" ]; then
+		printf "%s: No updates\n" "${pkgname}"
+		return
+	fi
+
+	printf "%s: %s -> %s\n" "${pkgname}" "${_upstreamver}" "${VERSION}"
+
+	if not "${APPLY}"; then
+		return
+	fi
+
+	# Update
+	sed -i -e "s/^_upstreamver=.*\$/_upstreamver='${VERSION}'/" -e "s/^pkgrel=.*\$/pkgrel=1/" PKGBUILD
+	updpkgsums
+	makepkg --printsrcinfo > .SRCINFO
+
+	# Build and install
+	makepkg -sicr
+
+	# Refresh pkgver for commit message
+	source ./PKGBUILD
+
+	# Commit
+	git add .
+	git commit -m "update to ${pkgver};"
+	git diff --color HEAD~1 | cat
+}
+
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+	echo "Refer to the header of the source file for usage of this tool"
+	exit
+fi
+
+APPLY="false"
+if [ "$1" = "--apply" ]; then
+	APPLY="true"
+	shift
+fi
+
+while [ "$#" -ne 0 ]; do
+  (check_package "$1" || printf "%s: Failed to check for package update (common causes: github api rate limit, network issues)\n" "$(basename $1)")
+  shift
+done
+
+# cd "${_working_dir}"
