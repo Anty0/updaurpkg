@@ -12,6 +12,7 @@ PKGBUILD requirements:
   variable _source_type - one of values:
     github-releases - check for update in github repository releases, requires variable _repo with user/repo as value
     github-tags - check for update in github repository tags, requires variable _repo with user/repo as value
+    pypi-releases - check for update on pypi.org site, requires variable _pypi_package with package name as value
     custom - use output of function _upstreamver_check as current version
   variable _upstreamver - will be modified according to the new version
   variable _upstreamver_regex - optional, check new version against regex using grep

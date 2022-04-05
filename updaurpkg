@@ -8,6 +8,7 @@
 #   variable _source_type - one of values:
 #     github-releases - check for update in github repository releases, requires variable _repo with user/repo as value
 #     github-tags - check for update in github repository tags, requires variable _repo with user/repo as value
+#     pypi-releases - check for update on pypi.org site, requires variable _pypi_package with package name as value
 #     custom - use output of function _upstreamver_check as current version
 #   variable _upstreamver - will be modified according to the new version
 #   variable _upstreamver_regex - optional, check new version against regex using grep
@@ -26,6 +27,36 @@ set -o pipefail
 # _working_dir="$(pwd)"
 # _nextcloud_app_info=""
 
+github-releases-version() {
+	curl --no-progress-meter \
+			-H "Accept: application/vnd.github.v3+json" \
+			"https://api.github.com/repos/${_repo}/releases/latest" 2>/dev/null | \
+		jq -r '.tag_name'
+}
+
+github-tags-version() {
+	curl --no-progress-meter \
+			-H "Accept: application/vnd.github.v3+json" \
+			"https://api.github.com/repos/${_repo}/tags" 2>/dev/null | \
+		jq -r '.[0].name'
+}
+
+pypi-releases-version() {
+	curl --no-progress-meter "https://pypi.org/pypi/${_pypi_package}/json" | \
+		jq -r '.info.version'
+
+	# ";" +
+	# (
+	# 	.releases[.info.version] |
+	# 	map(select(.python_version == "source")) |
+	# 	.[0].url |
+	# 	match("https:\/\/files.pythonhosted.org\/packages\/(.*)\/.*$").captures[0].string
+	# )
+}
+
+custom-version() {
+	_upstreamver_check
+}
 
 check_package() {
 	# cd "${_working_dir}"
@@ -38,6 +69,7 @@ check_package() {
 	# unset pkgver
 	# unset _source_type
 	# unset _repo
+	# unset _pypi_package
 	# unset _upstreamver_check
 	# unset _upstreamver
 	# unset _upstreamver_regex
@@ -48,21 +80,17 @@ check_package() {
 	cd "$1"
 	source ./PKGBUILD
 
-	case "$_source_type" in
-	github-releases)
-		VERSION="$(curl -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${_repo}/releases/latest" 2>/dev/null | jq -r '.tag_name')"
-		;;
-	github-tags)
-		VERSION="$(curl -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/${_repo}/tags" 2>/dev/null | jq -r '.[0].name')"
-		;;
-	custom)
-		VERSION="$(_upstreamver_check)"
-		;;
-	*)
+	if [ -z "${_source_type}" ]; then
+		printf "%s: Skip (no source type specified)\n" "${pkgname}"
+		return
+	fi
+
+	if [ "$(type -t "${_source_type}-version")" != 'function' ]; then
 		printf "%s: Skip (unsupported source type)\n" "${pkgname}"
 		return
-		;;
-	esac
+	fi
+
+	VERSION="$(${_source_type}-version)"
 
 	if [ -n "${_upstreamver_regex}" ] && ! grep -q -E -- "${_upstreamver_regex}" <<< "${VERSION}"; then
 		printf "%s: Failed validation of upstream version: %s\n" "${pkgname}" "${VERSION}"
@@ -86,7 +114,7 @@ check_package() {
 	
 	[ "$(type -t _after_check_hook)" == 'function' ] && _after_check_hook "${VERSION}"
 
-	if [ "${_upstreamver}" = "${VERSION}" ]; then
+	if [ "${_upstreamver}" == "${VERSION}" ]; then
 		printf "%s: No updates\n" "${pkgname}"
 		return
 	fi
