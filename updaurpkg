@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Usage: updaurpkg [--apply] PACKAGE_DIRECTORY...
-#   Checks for available upstream updates
+# Usage: updaurpkg [--apply] [PACKAGE_DIRECTORY ...]
+#   Checks for available upstream updates of package in current directory or given directory in arguments
 #     --apply - Also apply update to the PKGBUILD, build and install package and commit changes
 
 # PKGBUILD requirements:
@@ -16,6 +16,8 @@
 ####################################
 # Disabled feateures
 #   variable _nextcloud_appname - optional, verify version against nextcloud app repository
+#         | Why disabled => loading new list of all apps for each package will quickly reach nextcloud api rate limit,
+#                           caching of the list would be required for proper implementation of this feature
 
 set -e
 set -o pipefail
@@ -62,7 +64,7 @@ check_package() {
 		;;
 	esac
 
-	if [ -n "${_upstreamver_regex}" ] && not grep -q -E -- "${_upstreamver_regex}" <<< "${VERSION}"; then
+	if [ -n "${_upstreamver_regex}" ] && ! grep -q -E -- "${_upstreamver_regex}" <<< "${VERSION}"; then
 		printf "%s: Failed validation of upstream version: %s\n" "${pkgname}" "${VERSION}"
 		return
 	fi
@@ -91,7 +93,7 @@ check_package() {
 
 	printf "%s: %s -> %s\n" "${pkgname}" "${_upstreamver}" "${VERSION}"
 
-	if not "${APPLY}"; then
+	if ! "${APPLY}"; then
 		return
 	fi
 
@@ -112,6 +114,10 @@ check_package() {
 	git diff --color HEAD~1 | cat
 }
 
+try_check_package() {
+	(check_package "$1" || printf "%s: Failed to check for package update (common causes: github api rate limit, network issues)\n" "$(basename "$(realpath "$1")")")
+}
+
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
 	echo "Refer to the header of the source file for usage of this tool"
 	exit
@@ -123,9 +129,15 @@ if [ "$1" = "--apply" ]; then
 	shift
 fi
 
-while [ "$#" -ne 0 ]; do
-  (check_package "$1" || printf "%s: Failed to check for package update (common causes: github api rate limit, network issues)\n" "$(basename $1)")
-  shift
-done
+if [ "$#" -eq 0 ]; then
+	# No path as argument - use current directory by default
+	try_check_package "."
+else
+	# Check all paths from arguments for updates
+	while [ "$#" -ne 0 ]; do
+		try_check_package "$1"
+		shift
+	done
+fi
 
 # cd "${_working_dir}"

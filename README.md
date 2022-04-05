@@ -4,8 +4,8 @@ Simple tool to automatize checking for upstream updates of arch linux user repos
 ## Usage
 
 ```
-Usage: updaurpkg [--apply] PACKAGE_DIRECTORY...
-  Checks for available upstream updates
+Usage: updaurpkg [--apply] [PACKAGE_DIRECTORY ...]
+  Checks for available upstream updates of package in current directory or given directory in arguments
     --apply - Also apply update to the PKGBUILD, build and install package and commit changes
 
 PKGBUILD requirements:
